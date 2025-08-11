@@ -1,0 +1,58 @@
+postgres:
+  connection_string: "postgresql://martin_user:martin_password@postgis:5432/martin_db"
+  # 연결 풀 최적화
+  max_size: 30
+  min_size: 5
+  acquire_timeout: 30
+  max_lifetime: 3600
+
+# 캐시 크기 대폭 증대 (더 크게!)
+cache_size_mb: 2048
+
+# WebUI 활성화
+webui: enable-for-all
+
+# 성능 최적화를 위한 테이블별 세부 설정
+tables:
+  osm_polygon:
+    source: public.osm_polygon
+    geometry_column: way
+    srid: 3857
+    # 줌 레벨별 최적화
+    minzoom: 5    # 너무 낮은 줌에서는 로드 안 함
+    maxzoom: 21
+    # 타일 크기 최적화
+    buffer: 32    # 더 작은 버퍼로 성능 향상
+    extent: 2048  # 더 작은 extent로 성능 향상
+    # 데이터 단순화 - 필요한 속성만
+    properties:
+      
+    
+  osm_line:
+    source: public.osm_line
+    geometry_column: way
+    srid: 3857
+    minzoom: 8    # 라인도 높은 줌에서만
+    maxzoom: 21
+    buffer: 32    # 작은 버퍼
+    extent: 2048  # 작은 extent
+    
+
+# Raster functions (PNG)
+functions:
+  raster_osm_polygons:
+    source: public.raster_osm_polygons
+    minzoom: 5
+    maxzoom: 21
+    # 벡터와 동일한 설정
+    buffer: 32
+    extent: 2048
+
+# auto-publish 명시적으로 비활성화
+auto_publish: false
+
+# 성능 최적화 설정
+# 타일 생성 시 간소화 레벨
+simplify_geometry: true
+# 병렬 처리 최적화  
+pool_size: 20

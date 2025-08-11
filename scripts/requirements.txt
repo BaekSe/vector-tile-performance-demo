@@ -1,0 +1,6 @@
+# Python 패키지 의존성
+aiohttp>=3.8.0
+aiofiles>=0.8.0
+asyncpg>=0.27.0  # PostgreSQL 비동기 연결
+Pillow>=9.0.0  # PNG/WebP 처리
+numpy>=1.21.0  # 이미지 데이터 처리

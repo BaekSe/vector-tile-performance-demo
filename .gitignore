@@ -1,0 +1,50 @@
+# AI-related files (exclude from public repo)
+CLAUDE.md
+.claude/
+claude-*
+
+# Data files
+dataset/*.pbf
+dataset/*.osm
+dataset/*.xml
+
+# Generated tiles
+tiles/
+logs/
+
+# Python environment
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Node.js (future use)
+node_modules/
+npm-debug.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Operating System
+.DS_Store
+Thumbs.db
+
+# Docker
+.docker/
+
+# Temporary files
+*.tmp
+*.log
+test_*.png
+
+# Environment config
+.env.local
+.env.production
+
+# Development/testing
+*-test.*
+*-debug.*

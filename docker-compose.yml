@@ -1,0 +1,77 @@
+version: '3.8'
+
+services:
+  postgis:
+    image: kartoza/postgis:15-3.3
+    container_name: martin-postgis
+    environment:
+      POSTGRES_DB: martin_db
+      POSTGRES_USER: martin_user
+      POSTGRES_PASSWORD: martin_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgis_data:/var/lib/postgresql/data
+      - ./init-db:/docker-entrypoint-initdb.d
+      - ./dataset:/dataset:ro
+    networks:
+      - martin-network
+
+  # PBF 파일 로딩을 위한 osm2pgsql 컨테이너 (선택적)
+  osm2pgsql:
+    image: iboates/osm2pgsql:latest
+    container_name: martin-osm2pgsql
+    depends_on:
+      - postgis
+    volumes:
+      - ./dataset:/dataset:ro
+      - ./init-db:/scripts
+    environment:
+      PGHOST: postgis
+      PGPORT: 5432
+      PGDATABASE: martin_db
+      PGUSER: martin_user
+      PGPASSWORD: martin_password
+      PGPASSFILE: ""
+    networks:
+      - martin-network
+    profiles:
+      - data-loading
+
+  martin:
+    image: ghcr.io/maplibre/martin:v0.14.1
+    container_name: martin-server
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: "postgresql://martin_user:martin_password@postgis:5432/martin_db"
+      MARTIN_CACHE_SIZE_MB: "256"
+    depends_on:
+      - postgis
+    volumes:
+      - ./martin-config.yaml:/config/martin-config.yaml
+    command: ["--config", "/config/martin-config.yaml"]
+    networks:
+      - martin-network
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:alpine
+    container_name: martin-nginx
+    ports:
+      - "8080:80"
+    volumes:
+      - ./web:/usr/share/nginx/html
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf
+    depends_on:
+      - martin
+    networks:
+      - martin-network
+    restart: unless-stopped
+
+volumes:
+  postgis_data:
+
+networks:
+  martin-network:
+    driver: bridge

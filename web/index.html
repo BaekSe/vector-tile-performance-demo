@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Martin Vector Tile Server - 연습 프로젝트</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@9.0.0/ol.css">
+    <style>
+        body {
+            margin: 0;
+            font-family: 'Arial', sans-serif;
+        }
+        
+        #map {
+            width: 100vw;
+            height: 100vh;
+        }
+        
+        .control-panel {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 20px;
+            border-radius: 8px;
+            max-width: 350px;
+            z-index: 1000;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        .control-panel h3 {
+            margin: 0 0 15px 0;
+            color: #333;
+            border-bottom: 2px solid #eee;
+            padding-bottom: 8px;
+        }
+        
+        .info-section p {
+            margin: 5px 0;
+            font-size: 12px;
+            color: #666;
+        }
+        
+        .legend-section {
+            margin: 15px 0;
+        }
+        
+        .legend-title {
+            font-weight: bold;
+            margin-bottom: 10px;
+            color: #444;
+        }
+        
+        .layer-control {
+            margin: 8px 0;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .layer-control input[type="checkbox"] {
+            transform: scale(1.2);
+        }
+        
+        .layer-control label {
+            font-size: 14px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .color-indicator {
+            width: 20px;
+            height: 15px;
+            border-radius: 3px;
+            border: 1px solid #ccc;
+        }
+        
+        .layer-info {
+            font-size: 12px;
+            color: #888;
+            margin-left: 32px;
+            margin-top: 2px;
+        }
+        
+        .loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(255, 255, 255, 0.9);
+            padding: 20px;
+            border-radius: 5px;
+            z-index: 2000;
+        }
+    </style>
+</head>
+<body>
+    <div id="loading" class="loading">
+        <p>Martin 서버 연결 중...</p>
+    </div>
+    
+    <div id="map"></div>
+    
+    <div class="control-panel">
+        <h3>Martin Vector Tiles</h3>
+        
+        <div class="info-section">
+            <p><strong>서버:</strong> Martin via Nginx</p>
+            <p><strong>데이터베이스:</strong> PostGIS</p>
+            <p id="zoom-level">Zoom: -</p>
+            <p id="coordinates">좌표: -</p>
+        </div>
+        
+        <div class="legend-section">
+            <div class="legend-title">벡터 레이어</div>
+            <div id="vector-layer-controls">
+                <!-- 동적으로 생성됩니다 -->
+            </div>
+            
+            <div class="legend-title" style="margin-top: 15px;">래스터 레이어 (고성능)</div>
+            <div id="raster-layer-controls">
+                <!-- 동적으로 생성됩니다 -->
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/ol@9.0.0/dist/ol.js"></script>
+    <script>
+        // 벡터 레이어 설정
+        const vectorLayerConfigs = {
+            'osm_polygon': {
+                name: 'OSM 건물 (벡터)',
+                description: '건물 - 상세하지만 느림',
+                color: '#00aa00', 
+                fillColor: 'rgba(0, 170, 0, 0)',
+                enabled: true,
+                minzoom: 5,
+                maxzoom: 21,
+                type: 'vector'
+            },
+            'osm_line': {
+                name: 'OSM 도로 (벡터)',
+                description: '도로, 철도 - 상세함',
+                color: '#0088ff',
+                fillColor: '#0088ff',
+                enabled: false,
+                minzoom: 8,
+                maxzoom: 21,
+                type: 'vector'
+            }
+        };
+
+        // Martin 래스터 함수 기반 레이어들 (실제 PostGIS 데이터를 PNG로 렌더링)
+        const rasterLayerConfigs = {
+            'raster_osm_polygons': {
+                name: 'OSM 건물 (이미지)', 
+                description: 'PostGIS OSM 건물을 PNG로 렌더링',
+                color: '#66aa66',
+                enabled: true,
+                minzoom: 5,
+                maxzoom: 21,
+                type: 'martin_raster'
+            }
+        };
+
+        // 통합 레이어 설정
+        const layerConfigs = {...vectorLayerConfigs, ...rasterLayerConfigs};
+
+        // 지도 및 레이어 저장소
+        let vectorLayers = {};
+        
+        // 기본 지도 설정
+        const map = new ol.Map({
+            target: 'map',
+            layers: [
+                new ol.layer.Tile({
+                    source: new ol.source.OSM(),
+                    opacity: 0.5
+                })
+            ],
+            view: new ol.View({
+                center: ol.proj.fromLonLat([126.913, 37.593]),
+                zoom: 18,
+                maxZoom: 21
+            })
+        });
+
+        // 레이어 스타일 생성 함수
+        function createLayerStyle(tableName, zoom) {
+            const config = layerConfigs[tableName];
+            if (!config) return null;
+
+            // 줌 레벨 체크
+            if (zoom < config.minzoom || zoom > config.maxzoom) {
+                return null;
+            }
+
+            if (tableName.includes('point')) {
+                return new ol.style.Style({
+                    circle: new ol.style.Circle({
+                        radius: zoom > 10 ? 5 : 3,
+                        fill: new ol.style.Fill({ color: config.color }),
+                        stroke: new ol.style.Stroke({ color: 'white', width: 1 })
+                    })
+                });
+            } else if (tableName.includes('line')) {
+                return new ol.style.Style({
+                    stroke: new ol.style.Stroke({
+                        color: config.color,
+                        width: zoom > 10 ? 2 : 1
+                    })
+                });
+            } else {
+                // polygon
+                return new ol.style.Style({
+                    stroke: new ol.style.Stroke({
+                        color: config.color,
+                        width: zoom > 10 ? 1 : 0.5
+                    }),
+                    fill: new ol.style.Fill({
+                        color: config.fillColor
+                    })
+                });
+            }
+        }
+
+        // 레이어 토글 함수
+        function toggleLayer(tableName, enabled) {
+            if (vectorLayers[tableName]) {
+                vectorLayers[tableName].setVisible(enabled);
+                layerConfigs[tableName].enabled = enabled;
+            }
+        }
+
+        // 벡터/래스터 레이어 컨트롤 UI 생성
+        function createLayerControls(availableLayers) {
+            const vectorControlsDiv = document.getElementById('vector-layer-controls');
+            const rasterControlsDiv = document.getElementById('raster-layer-controls');
+            
+            vectorControlsDiv.innerHTML = '';
+            rasterControlsDiv.innerHTML = '';
+
+            // 벡터 레이어 컨트롤 생성
+            Object.keys(vectorLayerConfigs).forEach(tableName => {
+                if (!availableLayers.includes(tableName)) return;
+                
+                const config = vectorLayerConfigs[tableName];
+                const controlElement = createLayerControl(tableName, config);
+                vectorControlsDiv.appendChild(controlElement);
+            });
+
+            // 래스터 레이어 컨트롤 생성 (가상 레이어들)
+            Object.keys(rasterLayerConfigs).forEach(tableName => {
+                const config = rasterLayerConfigs[tableName];
+                const controlElement = createLayerControl(tableName, config);
+                rasterControlsDiv.appendChild(controlElement);
+            });
+        }
+
+        // 개별 레이어 컨트롤 요소 생성
+        function createLayerControl(tableName, config) {
+            const controlDiv = document.createElement('div');
+            controlDiv.className = 'layer-control';
+            
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.id = `layer-${tableName}`;
+            checkbox.checked = config.enabled;
+            checkbox.addEventListener('change', (e) => {
+                toggleLayer(tableName, e.target.checked);
+            });
+
+            const label = document.createElement('label');
+            label.htmlFor = `layer-${tableName}`;
+            
+            const colorIndicator = document.createElement('div');
+            colorIndicator.className = 'color-indicator';
+            colorIndicator.style.backgroundColor = config.color;
+
+            const labelText = document.createElement('span');
+            labelText.textContent = config.name;
+
+            label.appendChild(colorIndicator);
+            label.appendChild(labelText);
+
+            const infoDiv = document.createElement('div');
+            infoDiv.className = 'layer-info';
+            infoDiv.textContent = config.description;
+
+            controlDiv.appendChild(checkbox);
+            controlDiv.appendChild(label);
+            
+            const wrapperDiv = document.createElement('div');
+            wrapperDiv.appendChild(controlDiv);
+            wrapperDiv.appendChild(infoDiv);
+            
+            return wrapperDiv;
+        }
+
+        // Martin 벡터 타일 + 래스터 레이어 로드
+        async function loadTiles() {
+            try {
+                const response = await fetch('/api/catalog');
+                const catalog = await response.json();
+                
+                console.log('Martin Catalog:', catalog);
+                
+                if (catalog.tiles) {
+                    const availableVectorLayers = Object.keys(catalog.tiles).filter(name => 
+                        vectorLayerConfigs.hasOwnProperty(name)
+                    );
+                    
+                    // 레이어 컨트롤 UI 생성
+                    createLayerControls(availableVectorLayers);
+                    
+                    // 벡터 레이어 생성
+                    availableVectorLayers.forEach(tableName => {
+                        const vectorSource = new ol.source.VectorTile({
+                            format: new ol.format.MVT(),
+                            url: `/api/${tableName}/{z}/{x}/{y}`,
+                            cacheSize: 128,
+                            overlaps: false,
+                            wrapX: false
+                        });
+
+                        const vectorLayer = new ol.layer.VectorTile({
+                            source: vectorSource,
+                            visible: vectorLayerConfigs[tableName].enabled,
+                            renderMode: 'hybrid',
+                            style: function(feature, resolution) {
+                                const zoom = map.getView().getZoom();
+                                return createLayerStyle(tableName, zoom);
+                            },
+                            declutter: true,
+                            renderBuffer: 100,
+                            updateWhileAnimating: false,
+                            updateWhileInteracting: false
+                        });
+
+                        vectorLayers[tableName] = vectorLayer;
+                        map.addLayer(vectorLayer);
+                        console.log(`Added vector layer: ${tableName}`);
+                    });
+                }
+                
+                // Martin 래스터 함수 레이어 생성 (PNG 이미지)
+                Object.keys(rasterLayerConfigs).forEach(tableName => {
+                    const config = rasterLayerConfigs[tableName];
+                    
+                    console.log(`Creating Martin raster layer: ${tableName}`);
+                    
+                    const martinSource = new ol.source.XYZ({
+                        url: `/api/${tableName}/{z}/{x}/{y}`,
+                        crossOrigin: 'anonymous'
+                    });
+
+                    const martinRasterLayer = new ol.layer.Tile({
+                        source: martinSource,
+                        visible: config.enabled,
+                        opacity: 0.8,
+                        minZoom: config.minzoom,
+                        maxZoom: config.maxzoom
+                    });
+
+                    vectorLayers[tableName] = martinRasterLayer;
+                    map.addLayer(martinRasterLayer);
+                    console.log(`Added Martin raster layer: ${tableName}`);
+                });
+                
+                
+                document.getElementById('loading').style.display = 'none';
+                
+            } catch (error) {
+                console.error('Martin 서버 연결 실패:', error);
+                document.getElementById('loading').innerHTML = 
+                    '<p style="color: red;">Martin 서버 연결 실패</p>';
+            }
+        }
+
+        // 지도 정보 업데이트
+        function updateMapInfo() {
+            const view = map.getView();
+            const zoom = view.getZoom();
+            const center = ol.proj.toLonLat(view.getCenter());
+            
+            document.getElementById('zoom-level').textContent = `Zoom: ${Math.round(zoom)}`;
+            document.getElementById('coordinates').textContent = 
+                `좌표: ${center[1].toFixed(4)}, ${center[0].toFixed(4)}`;
+        }
+
+        // 이벤트 리스너
+        map.on('moveend', updateMapInfo);
+        map.getView().on('change', updateMapInfo);
+
+        // 초기 로드 (한 번만 실행)
+        let tilesLoaded = false;
+        if (!tilesLoaded) {
+            loadTiles();
+            tilesLoaded = true;
+        }
+    </script>
+</body>
+</html>
