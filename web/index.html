@@ -114,7 +114,19 @@
         </div>
         
         <div class="legend-section">
-            <div class="legend-title">벡터 레이어</div>
+            <div class="legend-title">Smart Mode</div>
+            <div class="layer-control">
+                <input type="checkbox" id="smart-mode-toggle">
+                <label for="smart-mode-toggle" style="cursor: pointer;">
+                    <div class="color-indicator" style="background: linear-gradient(45deg, #00aa00, #66aa66, #ff8800);"></div>
+                    <span>스마트 렌더링 (자동 전환)</span>
+                </label>
+            </div>
+            <div class="layer-info">
+                Z16+: 고품질 건물 | Z14-15: 단순화된 건물 | Z13-: PNG 건물
+            </div>
+            
+            <div class="legend-title" style="margin-top: 15px;">벡터 레이어</div>
             <div id="vector-layer-controls">
                 <!-- 동적으로 생성됩니다 -->
             </div>
@@ -168,8 +180,30 @@
         // 통합 레이어 설정
         const layerConfigs = {...vectorLayerConfigs, ...rasterLayerConfigs};
 
+        // Smart Mode용 단순화된 벡터 레이어 설정
+        const simplifiedVectorConfigs = {
+            'osm_polygon_simplified.1': {
+                name: 'OSM 건물 (단순화)',
+                color: '#44aa44',
+                fillColor: 'rgba(68, 170, 68, 0.1)',
+                type: 'vector_simplified',
+                minzoom: 14,
+                maxzoom: 15
+            },
+            'osm_line_simplified': {
+                name: 'OSM 도로 (단순화)',
+                color: '#0066cc',
+                fillColor: '#0066cc',
+                type: 'vector_simplified',
+                minzoom: 14,
+                maxzoom: 15
+            }
+        };
+
         // 지도 및 레이어 저장소
         let vectorLayers = {};
+        let smartModeLayers = {};
+        let isSmartModeEnabled = false;
         
         // 기본 지도 설정
         const map = new ol.Map({
@@ -189,8 +223,31 @@
 
         // 레이어 스타일 생성 함수
         function createLayerStyle(tableName, zoom) {
-            const config = layerConfigs[tableName];
-            if (!config) return null;
+            let config = layerConfigs[tableName];
+            
+            // 단순화된 벡터 레이어의 경우 원본 이름으로 설정 찾기
+            if (!config && tableName.includes('_simplified')) {
+                const baseName = tableName.replace('_simplified.1', '').replace('_simplified', '');
+                config = layerConfigs[baseName];
+            }
+            
+            // 여전히 설정이 없다면 간소화된 벡터 설정 사용
+            if (!config && simplifiedVectorConfigs[tableName]) {
+                config = simplifiedVectorConfigs[tableName];
+            }
+            
+            if (!config) {
+                // 기본 스타일 반환 (건물용)
+                return new ol.style.Style({
+                    stroke: new ol.style.Stroke({
+                        color: '#44aa44',
+                        width: 1
+                    }),
+                    fill: new ol.style.Fill({
+                        color: 'rgba(68, 170, 68, 0.1)'
+                    })
+                });
+            }
 
             // 줌 레벨 체크
             if (zoom < config.minzoom || zoom > config.maxzoom) {
@@ -307,8 +364,11 @@
                 
                 console.log('Martin Catalog:', catalog);
                 
+                // 사용 가능한 벡터 레이어 목록 (전역 스코프)
+                let availableVectorLayers = [];
+                
                 if (catalog.tiles) {
-                    const availableVectorLayers = Object.keys(catalog.tiles).filter(name => 
+                    availableVectorLayers = Object.keys(catalog.tiles).filter(name => 
                         vectorLayerConfigs.hasOwnProperty(name)
                     );
                     
@@ -369,6 +429,85 @@
                     console.log(`Added Martin raster layer: ${tableName}`);
                 });
                 
+                // Smart Mode용 레이어들 생성 (숨김 상태로)
+                // 1. 기존 벡터 레이어 복사 (Z16+용, 건물만)
+                availableVectorLayers.filter(name => name.includes('polygon')).forEach(tableName => {
+                    const vectorSource = new ol.source.VectorTile({
+                        format: new ol.format.MVT(),
+                        url: `/api/${tableName}/{z}/{x}/{y}`,
+                        cacheSize: 128,
+                        overlaps: false,
+                        wrapX: false
+                    });
+
+                    const vectorLayer = new ol.layer.VectorTile({
+                        source: vectorSource,
+                        visible: false,  // Smart Mode용은 기본 숨김
+                        renderMode: 'hybrid',
+                        style: function(feature, resolution) {
+                            const zoom = map.getView().getZoom();
+                            return createLayerStyle(tableName, zoom);
+                        },
+                        declutter: true,
+                        minZoom: 16,  // Z16에서만 시작
+                        maxZoom: 21   // Z21까지
+                    });
+
+                    smartModeLayers[tableName] = vectorLayer;
+                    map.addLayer(vectorLayer);
+                });
+                
+                // 2. 단순화된 벡터 레이어 (Z14-15용, 건물만)
+                Object.keys(simplifiedVectorConfigs).filter(name => name.includes('polygon')).forEach(tableName => {
+                    const config = simplifiedVectorConfigs[tableName];
+                    
+                    const vectorSource = new ol.source.VectorTile({
+                        format: new ol.format.MVT(),
+                        url: `/api/${tableName}/{z}/{x}/{y}`,
+                        cacheSize: 128,
+                        overlaps: false,
+                        wrapX: false
+                    });
+
+
+                    const vectorLayer = new ol.layer.VectorTile({
+                        source: vectorSource,
+                        visible: false,  // Smart Mode용은 기본 숨김
+                        renderMode: 'hybrid',
+                        style: function(feature, resolution) {
+                            const zoom = map.getView().getZoom();
+                            return createLayerStyle(tableName, zoom);
+                        },
+                        declutter: true,
+                        minZoom: 14,  // Z14에서만 시작
+                        maxZoom: 16   // Z16 미만까지 (Z15까지 포함)
+                    });
+
+                    smartModeLayers[tableName] = vectorLayer;
+                    map.addLayer(vectorLayer);
+                });
+                
+                // 3. 래스터 레이어 복사 (Z13-용)
+                Object.keys(rasterLayerConfigs).forEach(tableName => {
+                    const config = rasterLayerConfigs[tableName];
+                    
+                    const martinSource = new ol.source.XYZ({
+                        url: `/api/${tableName}/{z}/{x}/{y}`,
+                        crossOrigin: 'anonymous'
+                    });
+
+                    const martinRasterLayer = new ol.layer.Tile({
+                        source: martinSource,
+                        visible: false,  // Smart Mode용은 기본 숨김
+                        opacity: 0.8,
+                        minZoom: 5,   // Z5에서 시작
+                        maxZoom: 14   // Z13까지 포함하도록 14로 변경
+                    });
+
+                    smartModeLayers[tableName] = martinRasterLayer;
+                    map.addLayer(martinRasterLayer);
+                });
+                
                 
                 document.getElementById('loading').style.display = 'none';
                 
@@ -379,20 +518,82 @@
             }
         }
 
+        // Smart Mode 토글 함수
+        function toggleSmartMode(enabled) {
+            isSmartModeEnabled = enabled;
+            
+            if (enabled) {
+                // 기존 레이어들 숨기기
+                Object.values(vectorLayers).forEach(layer => layer.setVisible(false));
+                
+                // Smart Mode 레이어 활성화
+                updateSmartModeLayers();
+            } else {
+                // Smart Mode 레이어들 숨기기
+                Object.values(smartModeLayers).forEach(layer => layer.setVisible(false));
+                
+                // 기존 레이어 설정 복원
+                Object.keys(layerConfigs).forEach(tableName => {
+                    if (vectorLayers[tableName]) {
+                        vectorLayers[tableName].setVisible(layerConfigs[tableName].enabled);
+                    }
+                });
+            }
+        }
+
+        // Smart Mode 레이어 업데이트 (줌 레벨에 따라)
+        function updateSmartModeLayers() {
+            if (!isSmartModeEnabled) return;
+            
+            const zoom = map.getView().getZoom();
+            const flooredZoom = Math.floor(zoom);
+            
+            
+            // 모든 Smart Mode 레이어 숨기기
+            Object.values(smartModeLayers).forEach(layer => layer.setVisible(false));
+            
+            if (flooredZoom >= 16) {
+                // Z16+: 기존 벡터 레이어 (건물만)
+                if (smartModeLayers['osm_polygon']) {
+                    smartModeLayers['osm_polygon'].setVisible(true);
+                }
+            } else if (flooredZoom >= 14) {
+                // Z14-15: 단순화된 벡터 레이어 (건물만)
+                if (smartModeLayers['osm_polygon_simplified.1']) {
+                    smartModeLayers['osm_polygon_simplified.1'].setVisible(true);
+                }
+            } else {
+                // Z13-: PNG 래스터 레이어 (건물만)
+                if (smartModeLayers['raster_osm_polygons']) {
+                    smartModeLayers['raster_osm_polygons'].setVisible(true);
+                }
+            }
+        }
+
         // 지도 정보 업데이트
         function updateMapInfo() {
             const view = map.getView();
             const zoom = view.getZoom();
             const center = ol.proj.toLonLat(view.getCenter());
             
-            document.getElementById('zoom-level').textContent = `Zoom: ${Math.round(zoom)}`;
+            document.getElementById('zoom-level').textContent = `Zoom: ${Math.floor(zoom)}`;
             document.getElementById('coordinates').textContent = 
                 `좌표: ${center[1].toFixed(4)}, ${center[0].toFixed(4)}`;
+            
+            // Smart Mode가 활성화된 경우 레이어 업데이트
+            if (isSmartModeEnabled) {
+                updateSmartModeLayers();
+            }
         }
 
         // 이벤트 리스너
         map.on('moveend', updateMapInfo);
         map.getView().on('change', updateMapInfo);
+        
+        // Smart Mode 토글 이벤트 리스너
+        document.getElementById('smart-mode-toggle').addEventListener('change', function(e) {
+            toggleSmartMode(e.target.checked);
+        });
 
         // 초기 로드 (한 번만 실행)
         let tilesLoaded = false;

@@ -38,18 +38,37 @@ tables:
     extent: 2048  # 작은 extent
     
 
-# Raster functions (PNG)
+# PNG Raster functions와 Vector functions 명시적 설정
 functions:
+  # PNG Raster function (명시적 PNG 형식 지정)
   raster_osm_polygons:
     source: public.raster_osm_polygons
+    content_type: image/png
     minzoom: 5
     maxzoom: 21
-    # 벡터와 동일한 설정
-    buffer: 32
-    extent: 2048
+    
+  # Smart Mode용 simplified vector functions
+  osm_polygon_simplified:
+    source: public.osm_polygon_simplified
+    minzoom: 5
+    maxzoom: 15
+    buffer: 64
+    extent: 4096
+    
+  osm_line_simplified:
+    source: public.osm_line_simplified
+    minzoom: 8
+    maxzoom: 15
+    buffer: 64
+    extent: 4096
 
-# auto-publish 명시적으로 비활성화
-auto_publish: false
+# auto-publish 설정
+auto_publish:
+  tables: false
+  functions:
+    from_schemas: ["public"]
+    include_patterns: [".*"]
+    exclude_patterns: ["raster_.*"]  # 래스터 함수는 명시적 설정만 사용
 
 # 성능 최적화 설정
 # 타일 생성 시 간소화 레벨
